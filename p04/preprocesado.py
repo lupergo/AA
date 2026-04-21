@@ -8,6 +8,7 @@ from sklearn.impute import IterativeImputer
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.linear_model import BayesianRidge
 from sklearn.feature_selection import SelectKBest, f_classif
+from xgboost import XGBClassifier
 
 
 df_train = pd.read_csv('data/train.csv')
@@ -21,6 +22,7 @@ def eliminacion_duplicados_train(df):
     df = df.drop(columns=['Data_Solicitude'])
     return df
 def eliminacion_duplicados_test(df):
+    
     # Eliminar columnas inútiles (ID)
     df = df.drop(columns=['ID_Cliente'])
     df = df.drop(columns=['Data_Solicitude'])
@@ -65,29 +67,25 @@ COLS_NUMERIC = [
 
 COLS_BINARY    = ['Subscricion_Email', 'Historial_Impagos']  # 0/1
 
-COLS_ORDINAL   = ['Profesion', 'Tipo_Dispositivo', 'Dia_Solicitude']
+COLS_ORDINAL   = ['Profesion', 'Tipo_Dispositivo', 'Dia_Solicitude', 'Codigo_Postal']
 
-COLS_ONEHOT    = ['Profesion', 'Tipo_Dispositivo', 'Dia_Solicitude']
+COLS_ONEHOT    = ['Profesion', 'Tipo_Dispositivo', 'Dia_Solicitude', 'Codigo_Postal']
 
 # Nueva categoría para evitar la explosión de columnas del OneHot
-COLS_TARGET_ENC = ['Codigo_Postal'] 
 
 # ── Preprocessor A: para árboles (XGBoost, RF, LightGBM) ─────────────────────
 preprocessor_tree = ColumnTransformer(transformers=[
     ('num',  'passthrough',                          COLS_NUMERIC),
     ('cat',  OrdinalEncoder(handle_unknown='use_encoded_value',
                             unknown_value=-1),       COLS_ORDINAL),
-    ('target', TargetEncoder(smoothing=10),          COLS_TARGET_ENC), # Codificamos CP por su riesgo medio
     ('bin',  'passthrough',                          COLS_BINARY),
 ], remainder='drop')
 
 # ── Preprocessor B: para modelos lineales / KNN / MLP ────────────────────────
 preprocessor_linear = ColumnTransformer(transformers=[
-    ('num',  RobustScaler(),                         COLS_NUMERIC),
-    ('target', TargetEncoder(smoothing=10),          COLS_TARGET_ENC), # CP como valor numérico continuo
+    ('num',  RobustScaler(),                         COLS_NUMERIC + COLS_BINARY),
     ('cat',  OneHotEncoder(handle_unknown='ignore',
                            sparse_output=False),     COLS_ONEHOT),
-    ('bin',  'passthrough',                          COLS_BINARY),
 ], remainder='drop')
 
 
@@ -175,14 +173,7 @@ def eliminar_o_imputar(df_train, df_val, max_faltantes=3):
     mask = df_train.isnull().sum(axis=1) < max_faltantes
     df_train = df_train[mask].copy()
 
-    # ── 2. Configurar el imputador (regresión iterativa) ──────────────────────
-    imputer_pro = IterativeImputer(
-        estimator=ExtraTreesRegressor(n_estimators=50, random_state=42),
-        max_iter=10,
-        random_state=42,
-        initial_strategy='median',
-        imputation_order='ascending'
-    )
+    # ── 2. Configurar el imputador (bayesian ridge) ──────────────────────
     imputer_ligero = IterativeImputer(
         estimator=BayesianRidge(),
         max_iter=10,
@@ -219,6 +210,68 @@ def seleccion_caracteristicas_check(X_train_linear, y_train, target='Target_Risc
 
     return df_scores
 
+from sklearn.feature_selection import SelectKBest, SelectFromModel, f_classif
+from sklearn.ensemble import RandomForestClassifier
+
+def seleccion_caracteristicas(X_train, y_train, metodo='kbest', k=20, threshold='mean', modelo=None):
+    """
+    Parámetros
+    ----------
+    X_train   : DataFrame ya transformado (numérico)
+    y_train   : Serie con el target
+    metodo    : 'kbest' o 'model'
+    k         : número de features a seleccionar (solo para kbest)
+    threshold : umbral de importancia (solo para model)
+                'mean' = features con importancia > media
+                'median' = features con importancia > mediana
+                0.01 = umbral manual
+    
+    Retorna
+    -------
+    X_reducido : DataFrame con solo las features seleccionadas
+    selector   : objeto selector ya fiteado (para aplicar en test)
+    df_scores  : ranking completo de features con sus puntuaciones
+    """
+
+    if metodo == 'kbest':
+        # ── SelectKBest: ranking estadístico ─────────────────────────────
+        selector = SelectKBest(score_func=f_classif, k=k)
+        selector.fit(X_train, y_train)
+
+        df_scores = pd.DataFrame({
+            'Característica': X_train.columns,
+            'Puntuación':     selector.scores_,
+            'Seleccionada':   selector.get_support()
+        }).sort_values('Puntuación', ascending=False)
+
+    elif metodo == 'model':
+        # ── SelectFromModel: importancia aprendida por modelo
+        modelo_base = modelo if modelo is not None else RandomForestClassifier(n_estimators=100, random_state=42)
+        selector = SelectFromModel(
+            estimator=modelo_base,
+            threshold=threshold,  # 'mean', 'median' o valor numérico
+            prefit=False          # el selector entrena el modelo internamente
+        )
+        selector.fit(X_train, y_train)
+
+        df_scores = pd.DataFrame({
+            'Característica': X_train.columns,
+            'Puntuación':     selector.estimator_.feature_importances_,
+            'Seleccionada':   selector.get_support()
+        }).sort_values('Puntuación', ascending=False)
+
+    else:
+        raise ValueError("metodo debe ser 'kbest' o 'model'")
+
+    # ── Aplicar selección y devolver subconjunto ──────────────────────────
+    cols_seleccionadas = X_train.columns[selector.get_support()]
+    X_reducido = X_train[cols_seleccionadas]
+
+    print(f"Features originales : {X_train.shape[1]}")
+    print(f"Features seleccionadas: {len(cols_seleccionadas)}")
+    print(f"\nTop 10:\n{df_scores.head(10).to_string(index=False)}")
+
+    return X_reducido, selector, df_scores
 
 def preprocesado(df_train_pre, df_test_pre, target='Target_Risco', iqr_multiplier=3, max_faltantes=5):
     df_train = eliminacion_duplicados_train(df_train_pre.copy())
@@ -264,10 +317,5 @@ def preprocesado(df_train_pre, df_test_pre, target='Target_Risco', iqr_multiplie
     df_train_linear = pd.concat([X_train_linear, y_train], axis=1)
     df_test_linear = X_test_linear.copy()
 
-    #EXTRA: Dropear la columna Patrimonio_Total
-    df_train_linear = df_train_linear.drop(columns=['num__Patrimonio_Total'])
-    df_test_linear = df_test_linear.drop(columns=['num__Patrimonio_Total'])
-    df_train_tree = df_train_tree.drop(columns=['num__Patrimonio_Total'])
-    df_test_tree = df_test_tree.drop(columns=['num__Patrimonio_Total'])
 
     return df_train_tree, df_train_linear, df_test_tree, df_test_linear
