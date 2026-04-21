@@ -19,13 +19,13 @@ def eliminacion_duplicados_train(df):
 
     # Eliminar columnas inútiles (ID)
     df = df.drop(columns=['ID_Cliente'])
-    df = df.drop(columns=['Data_Solicitude'])
+    df = df.sort_values('Data_Solicitude').reset_index(drop=True)
     return df
 def eliminacion_duplicados_test(df):
     
     # Eliminar columnas inútiles (ID)
     df = df.drop(columns=['ID_Cliente'])
-    df = df.drop(columns=['Data_Solicitude'])
+    df = df.sort_values('Data_Solicitude').reset_index(drop=True)
     return df
 
 
