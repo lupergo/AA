@@ -19,13 +19,11 @@ def eliminacion_duplicados_train(df):
 
     # Eliminar columnas inútiles (ID)
     df = df.drop(columns=['ID_Cliente'])
-    df = df.sort_values('Data_Solicitude').reset_index(drop=True)
     return df
 def eliminacion_duplicados_test(df):
     
     # Eliminar columnas inútiles (ID)
     df = df.drop(columns=['ID_Cliente'])
-    df = df.sort_values('Data_Solicitude').reset_index(drop=True)
     return df
 
 
@@ -267,9 +265,9 @@ def seleccion_caracteristicas(X_train, y_train, metodo='kbest', k=20, threshold=
     cols_seleccionadas = X_train.columns[selector.get_support()]
     X_reducido = X_train[cols_seleccionadas]
 
-    print(f"Features originales : {X_train.shape[1]}")
-    print(f"Features seleccionadas: {len(cols_seleccionadas)}")
-    print(f"\nTop 10:\n{df_scores.head(10).to_string(index=False)}")
+    #print(f"Features originales : {X_train.shape[1]}")
+    #print(f"Features seleccionadas: {len(cols_seleccionadas)}")
+    # print(f"\nTop 10:\n{df_scores.head(10).to_string(index=False)}")
 
     return X_reducido, selector, df_scores
 
